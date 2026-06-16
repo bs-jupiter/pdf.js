@@ -1,8 +1,9 @@
 import * as builder from "./builder.mjs";
+import { fileURLToPath } from "url";
 import fs from "fs";
 import path from "path";
 
-const __dirname = import.meta.dirname;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let errors = 0;
 
@@ -40,12 +41,6 @@ files.forEach(function (expectationFilename) {
   }
   if (out !== expectation) {
     errors++;
-
-    // Allow regenerating the expected output using
-    //   OVERWRITE=true node ./external/builder/test-fixtures.mjs
-    if (process.env.OVERWRITE) {
-      fs.writeFileSync(expectationFilename, out + "\n");
-    }
 
     console.log("Assertion failed for " + inFilename);
     console.log("--------------------------------------------------");

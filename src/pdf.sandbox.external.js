@@ -16,7 +16,6 @@
 // In mozilla-central, this file is loaded as non-module script,
 // so it mustn't have any dependencies.
 
-// eslint-disable-next-line no-restricted-syntax
 export class SandboxSupportBase {
   /**
    * @param {DOMWindow} - win
@@ -63,9 +62,6 @@ export class SandboxSupportBase {
    * @param {Array<Object>} args - Arguments of the function.
    */
   callSandboxFunction(name, args) {
-    if (!this.commFun) {
-      return;
-    }
     try {
       args = this.exportValueToSandbox(args);
       this.commFun(name, args);

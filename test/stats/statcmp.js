@@ -1,9 +1,6 @@
-/* eslint-disable import/no-commonjs */
+"use strict";
 
-import { createRequire } from "module";
-import fs from "fs";
-
-const require = createRequire(import.meta.url);
+const fs = require("fs");
 const ttest = require("ttest");
 
 const VALID_GROUP_BYS = ["browser", "pdf", "page", "round", "stat"];
@@ -64,7 +61,9 @@ function flatten(stats) {
   });
   // Use only overall results if not grouped by 'stat'
   if (!options.groupBy.includes("stat")) {
-    rows = rows.filter(s => s.stat === "Overall");
+    rows = rows.filter(function (s) {
+      return s.stat === "Overall";
+    });
   }
   return rows;
 }
@@ -76,7 +75,10 @@ function pad(s, length, dir /* default: 'right' */) {
 }
 
 function mean(array) {
-  return array.reduce((a, b) => a + b, 0) / array.length;
+  function add(a, b) {
+    return a + b;
+  }
+  return array.reduce(add, 0) / array.length;
 }
 
 /* Comparator for row key sorting. */
@@ -124,7 +126,9 @@ function stat(baseline, current) {
   }
   const rows = [];
   // collect rows and measure column widths
-  const width = labels.map(s => s.length);
+  const width = labels.map(function (s) {
+    return s.length;
+  });
   rows.push(labels);
   for (const key of keys) {
     const baselineMean = mean(baselineGroup[key]);
@@ -155,7 +159,9 @@ function stat(baseline, current) {
   }
 
   // add horizontal line
-  const hline = width.map(w => new Array(w + 1).join("-"));
+  const hline = width.map(function (w) {
+    return new Array(w + 1).join("-");
+  });
   rows.splice(1, 0, hline);
 
   // print output

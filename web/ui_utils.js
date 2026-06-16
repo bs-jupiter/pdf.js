@@ -13,8 +13,6 @@
  * limitations under the License.
  */
 
-import { MathClamp } from "pdfjs-lib";
-
 const DEFAULT_SCALE_VALUE = "auto";
 const DEFAULT_SCALE = 1.0;
 const DEFAULT_SCALE_DELTA = 1.1;
@@ -79,6 +77,32 @@ const CursorTool = {
 const AutoPrintRegExp = /\bprint\s*\(/;
 
 /**
+ * Scale factors for the canvas, necessary with HiDPI displays.
+ */
+class OutputScale {
+  constructor() {
+    const pixelRatio = window.devicePixelRatio || 1;
+
+    /**
+     * @type {number} Horizontal scale.
+     */
+    this.sx = pixelRatio;
+
+    /**
+     * @type {number} Vertical scale.
+     */
+    this.sy = pixelRatio;
+  }
+
+  /**
+   * @type {boolean} Returns `true` when scaling is required, `false` otherwise.
+   */
+  get scaled() {
+    return this.sx !== 1 || this.sy !== 1;
+  }
+}
+
+/**
  * Scrolls specified element into view of its parent.
  * @param {HTMLElement} element - The element to be visible.
  * @param {Object} [spot] - An object with optional top and left properties,
@@ -120,17 +144,7 @@ function scrollIntoView(element, spot, scrollMatches = false) {
       offsetY += spot.top;
     }
     if (spot.left !== undefined) {
-      if (scrollMatches) {
-        const elementWidth = element.getBoundingClientRect().width;
-        const padding = MathClamp(
-          (parent.clientWidth - elementWidth) / 2,
-          20,
-          400
-        );
-        offsetX += spot.left - padding;
-      } else {
-        offsetX += spot.left;
-      }
+      offsetX += spot.left;
       parent.scrollLeft = offsetX;
     }
   }
@@ -141,7 +155,7 @@ function scrollIntoView(element, spot, scrollMatches = false) {
  * Helper function to start monitoring the scroll event and converting them into
  * PDF.js friendly one: with scroll debounce and scroll direction.
  */
-function watchScroll(viewAreaElement, callback, abortSignal = undefined) {
+function watchScroll(viewAreaElement, callback) {
   const debounceScroll = function (evt) {
     if (rAF) {
       return;
@@ -175,15 +189,7 @@ function watchScroll(viewAreaElement, callback, abortSignal = undefined) {
   };
 
   let rAF = null;
-  viewAreaElement.addEventListener("scroll", debounceScroll, {
-    useCapture: true,
-    signal: abortSignal,
-  });
-  abortSignal?.addEventListener(
-    "abort",
-    () => window.cancelAnimationFrame(rAF),
-    { once: true }
-  );
+  viewAreaElement.addEventListener("scroll", debounceScroll, true);
   return state;
 }
 
@@ -200,18 +206,19 @@ function parseQueryString(query) {
   return params;
 }
 
-const InvisibleCharsRegExp = /[\x00-\x1F]/g;
+const InvisibleCharactersRegExp = /[\x01-\x1F]/g;
 
 /**
  * @param {string} str
  * @param {boolean} [replaceInvisible]
  */
 function removeNullCharacters(str, replaceInvisible = false) {
-  if (!InvisibleCharsRegExp.test(str)) {
+  if (typeof str !== "string") {
+    console.error(`The argument must be a string.`);
     return str;
   }
   if (replaceInvisible) {
-    return str.replaceAll(InvisibleCharsRegExp, m => (m === "\x00" ? "" : " "));
+    str = str.replaceAll(InvisibleCharactersRegExp, " ");
   }
   return str.replaceAll("\x00", "");
 }
@@ -254,7 +261,6 @@ function binarySearchFirstItem(items, condition, start = 0) {
  *  @param {number} x - Positive float number.
  *  @returns {Array} Estimated fraction: the first array item is a numerator,
  *                   the second one is a denominator.
- *                   They are both natural numbers.
  */
 function approximateFraction(x) {
   // Fast paths for int numbers or their inversions.
@@ -301,12 +307,9 @@ function approximateFraction(x) {
   return result;
 }
 
-/**
- * @param {number} x - A positive number to round to a multiple of `div`.
- * @param {number} div - A natural number.
- */
-function floorToDivide(x, div) {
-  return x - (x % div);
+function roundToDivide(x, div) {
+  const r = x % div;
+  return r === 0 ? x : Math.round(x - r + div);
 }
 
 /**
@@ -566,11 +569,10 @@ function getVisibleElements({
       continue;
     }
 
-    const minY = Math.max(0, top - currentHeight);
-    const minX = Math.max(0, left - currentWidth);
-
-    const hiddenHeight = minY + Math.max(0, viewBottom - bottom);
-    const hiddenWidth = minX + Math.max(0, viewRight - right);
+    const hiddenHeight =
+      Math.max(0, top - currentHeight) + Math.max(0, viewBottom - bottom);
+    const hiddenWidth =
+      Math.max(0, left - currentWidth) + Math.max(0, viewRight - right);
 
     const fractionHeight = (viewHeight - hiddenHeight) / viewHeight,
       fractionWidth = (viewWidth - hiddenWidth) / viewWidth;
@@ -580,18 +582,6 @@ function getVisibleElements({
       id: view.id,
       x: currentWidth,
       y: currentHeight,
-      visibleArea:
-        // We only specify which part of the page is visible when it's not
-        // the full page, as there is no point in handling a partial page
-        // rendering otherwise.
-        percent === 100
-          ? null
-          : {
-              minX,
-              minY,
-              maxX: Math.min(viewRight, right) - currentWidth,
-              maxY: Math.min(viewBottom, bottom) - currentHeight,
-            },
       view,
       percent,
       widthPercent: (fractionWidth * 100) | 0,
@@ -688,6 +678,10 @@ const docStyle =
     ? null
     : document.documentElement.style;
 
+function clamp(v, min, max) {
+  return Math.min(Math.max(v, min), max);
+}
+
 class ProgressBar {
   #classList = null;
 
@@ -709,7 +703,7 @@ class ProgressBar {
   }
 
   set percent(val) {
-    this.#percent = MathClamp(val, 0, 100);
+    this.#percent = clamp(val, 0, 100);
 
     if (isNaN(val)) {
       this.#classList.add("indeterminate");
@@ -735,7 +729,7 @@ class ProgressBar {
   }
 
   setDisableAutoFetch(delay = /* ms = */ 5000) {
-    if (this.#percent === 100 || isNaN(this.#percent)) {
+    if (isNaN(this.#percent)) {
       return;
     }
     if (this.#disableAutoFetchTimeout) {
@@ -857,25 +851,6 @@ function toggleExpandedBtn(button, toggle, view = null) {
   view?.classList.toggle("hidden", !toggle);
 }
 
-// In Firefox, the css calc function uses f32 precision but the Chrome or Safari
-// are using f64 one. So in order to have the same rendering in all browsers, we
-// need to use the right precision in order to have correct dimensions.
-const calcRound =
-  typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")
-    ? Math.fround
-    : (function () {
-        if (
-          typeof PDFJSDev !== "undefined" &&
-          PDFJSDev.test("LIB") &&
-          typeof document === "undefined"
-        ) {
-          return x => x;
-        }
-        const e = document.createElement("div");
-        e.style.width = "round(down, calc(1.6666666666666665 * 792px), 1px)";
-        return e.style.width === "calc(1320px)" ? Math.fround : x => x;
-      })();
-
 export {
   animationStarted,
   apiPageLayoutToViewerModes,
@@ -884,13 +859,11 @@ export {
   AutoPrintRegExp,
   backtrackBeforeAllVisibleElements, // only exported for testing
   binarySearchFirstItem,
-  calcRound,
   CursorTool,
   DEFAULT_SCALE,
   DEFAULT_SCALE_DELTA,
   DEFAULT_SCALE_VALUE,
   docStyle,
-  floorToDivide,
   getActiveOrFocusedElement,
   getPageSizeInches,
   getVisibleElements,
@@ -903,11 +876,13 @@ export {
   MIN_SCALE,
   normalizeWheelEventDelta,
   normalizeWheelEventDirection,
+  OutputScale,
   parseQueryString,
   PresentationModeState,
   ProgressBar,
   removeNullCharacters,
   RenderingStates,
+  roundToDivide,
   SCROLLBAR_PADDING,
   scrollIntoView,
   ScrollMode,

@@ -18,25 +18,18 @@
 // eslint-disable-next-line max-len
 /** @typedef {import("../src/display/display_utils").PageViewport} PageViewport */
 /** @typedef {import("./event_utils").EventBus} EventBus */
+/** @typedef {import("./interfaces").IL10n} IL10n */
 /** @typedef {import("./interfaces").IPDFLinkService} IPDFLinkService */
 /** @typedef {import("./interfaces").IRenderableView} IRenderableView */
 // eslint-disable-next-line max-len
 /** @typedef {import("./pdf_rendering_queue").PDFRenderingQueue} PDFRenderingQueue */
 
-import { OutputScale, RenderingCancelledException } from "pdfjs-lib";
-import { AppOptions } from "./app_options.js";
-import { RenderingStates } from "./ui_utils.js";
+import { OutputScale, RenderingStates } from "./ui_utils.js";
+import { RenderingCancelledException } from "pdfjs-lib";
 
 const DRAW_UPSCALE_FACTOR = 2; // See comment in `PDFThumbnailView.draw` below.
 const MAX_NUM_SCALING_STEPS = 3;
 const THUMBNAIL_WIDTH = 98; // px
-
-function zeroCanvas(c) {
-  // Zeroing the width and height causes Firefox to release graphics
-  // resources immediately, which can greatly reduce memory consumption.
-  c.width = 0;
-  c.height = 0;
-}
 
 /**
  * @typedef {Object} PDFThumbnailViewOptions
@@ -49,12 +42,7 @@ function zeroCanvas(c) {
  *   The default value is `null`.
  * @property {IPDFLinkService} linkService - The navigation/linking service.
  * @property {PDFRenderingQueue} renderingQueue - The rendering queue object.
- * @property {number} [maxCanvasPixels] - The maximum supported canvas size in
- *   total pixels, i.e. width * height. Use `-1` for no limit, or `0` for
- *   CSS-only zooming. The default value is 4096 * 8192 (32 mega-pixels).
- * @property {number} [maxCanvasDim] - The maximum supported canvas dimension,
- *   in either width or height. Use `-1` for no limit.
- *   The default value is 32767.
+ * @property {IL10n} l10n - Localization service.
  * @property {Object} [pageColors] - Overwrites background and foreground colors
  *   with user defined ones in order to improve readability in high contrast
  *   mode.
@@ -69,7 +57,7 @@ class TempImageFactory {
     tempCanvas.height = height;
 
     // Since this is a temporary canvas, we need to fill it with a white
-    // background ourselves. `#getPageDrawContext` uses CSS rules for this.
+    // background ourselves. `_getPageDrawContext` uses CSS rules for this.
     const ctx = tempCanvas.getContext("2d", { alpha: false });
     ctx.save();
     ctx.fillStyle = "rgb(255, 255, 255)";
@@ -79,8 +67,12 @@ class TempImageFactory {
   }
 
   static destroyCanvas() {
-    if (this.#tempCanvas) {
-      zeroCanvas(this.#tempCanvas);
+    const tempCanvas = this.#tempCanvas;
+    if (tempCanvas) {
+      // Zeroing the width and height causes Firefox to release graphics
+      // resources immediately, which can greatly reduce memory consumption.
+      tempCanvas.width = 0;
+      tempCanvas.height = 0;
     }
     this.#tempCanvas = null;
   }
@@ -101,8 +93,7 @@ class PDFThumbnailView {
     optionalContentConfigPromise,
     linkService,
     renderingQueue,
-    maxCanvasPixels,
-    maxCanvasDim,
+    l10n,
     pageColors,
   }) {
     this.id = id;
@@ -114,8 +105,6 @@ class PDFThumbnailView {
     this.viewport = defaultViewport;
     this.pdfPageRotate = defaultViewport.rotation;
     this._optionalContentConfigPromise = optionalContentConfigPromise || null;
-    this.maxCanvasPixels = maxCanvasPixels ?? AppOptions.get("maxCanvasPixels");
-    this.maxCanvasDim = maxCanvasDim || AppOptions.get("maxCanvasDim");
     this.pageColors = pageColors || null;
 
     this.eventBus = eventBus;
@@ -125,11 +114,13 @@ class PDFThumbnailView {
     this.renderTask = null;
     this.renderingState = RenderingStates.INITIAL;
     this.resume = null;
+    this.l10n = l10n;
 
     const anchor = document.createElement("a");
     anchor.href = linkService.getAnchorUrl("#page=" + id);
-    anchor.setAttribute("data-l10n-id", "pdfjs-thumb-page-title");
-    anchor.setAttribute("data-l10n-args", this.#pageL10nArgs);
+    this._thumbPageTitle.then(msg => {
+      anchor.title = msg;
+    });
     anchor.onclick = function () {
       linkService.goToPage(id);
       return false;
@@ -210,55 +201,77 @@ class PDFThumbnailView {
     this.resume = null;
   }
 
-  #getPageDrawContext(upscaleFactor = 1) {
+  /**
+   * @private
+   */
+  _getPageDrawContext(upscaleFactor = 1) {
     // Keep the no-thumbnail outline visible, i.e. `data-loaded === false`,
     // until rendering/image conversion is complete, to avoid display issues.
     const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d", { alpha: false });
     const outputScale = new OutputScale();
-    const width = upscaleFactor * this.canvasWidth,
-      height = upscaleFactor * this.canvasHeight;
 
-    outputScale.limitCanvas(
-      width,
-      height,
-      this.maxCanvasPixels,
-      this.maxCanvasDim
-    );
-    canvas.width = (width * outputScale.sx) | 0;
-    canvas.height = (height * outputScale.sy) | 0;
+    canvas.width = (upscaleFactor * this.canvasWidth * outputScale.sx) | 0;
+    canvas.height = (upscaleFactor * this.canvasHeight * outputScale.sy) | 0;
 
     const transform = outputScale.scaled
       ? [outputScale.sx, 0, 0, outputScale.sy, 0, 0]
       : null;
 
-    return { canvas, transform };
+    return { ctx, canvas, transform };
   }
 
-  #convertCanvasToImage(canvas) {
+  /**
+   * @private
+   */
+  _convertCanvasToImage(canvas) {
     if (this.renderingState !== RenderingStates.FINISHED) {
-      throw new Error("#convertCanvasToImage: Rendering has not finished.");
+      throw new Error("_convertCanvasToImage: Rendering has not finished.");
     }
-    const reducedCanvas = this.#reduceImage(canvas);
+    const reducedCanvas = this._reduceImage(canvas);
 
     const image = document.createElement("img");
     image.className = "thumbnailImage";
-    image.setAttribute("data-l10n-id", "pdfjs-thumb-page-canvas");
-    image.setAttribute("data-l10n-args", this.#pageL10nArgs);
+    this._thumbPageCanvas.then(msg => {
+      image.setAttribute("aria-label", msg);
+    });
     image.src = reducedCanvas.toDataURL();
     this.image = image;
 
     this.div.setAttribute("data-loaded", true);
     this._placeholderImg.replaceWith(image);
 
-    zeroCanvas(reducedCanvas);
+    // Zeroing the width and height causes Firefox to release graphics
+    // resources immediately, which can greatly reduce memory consumption.
+    reducedCanvas.width = 0;
+    reducedCanvas.height = 0;
+  }
+
+  async #finishRenderTask(renderTask, canvas, error = null) {
+    // The renderTask may have been replaced by a new one, so only remove
+    // the reference to the renderTask if it matches the one that is
+    // triggering this callback.
+    if (renderTask === this.renderTask) {
+      this.renderTask = null;
+    }
+
+    if (error instanceof RenderingCancelledException) {
+      return;
+    }
+    this.renderingState = RenderingStates.FINISHED;
+    this._convertCanvasToImage(canvas);
+
+    if (error) {
+      throw error;
+    }
   }
 
   async draw() {
     if (this.renderingState !== RenderingStates.INITIAL) {
       console.error("Must be in new state before drawing");
-      return;
+      return undefined;
     }
-    const { pageColors, pdfPage } = this;
+    const { pdfPage } = this;
 
     if (!pdfPage) {
       this.renderingState = RenderingStates.FINISHED;
@@ -272,7 +285,8 @@ class PDFThumbnailView {
     // the `draw` and `setImage` methods (fixes issue 8233).
     // NOTE: To primarily avoid increasing memory usage too much, but also to
     //   reduce downsizing overhead, we purposely limit the up-scaling factor.
-    const { canvas, transform } = this.#getPageDrawContext(DRAW_UPSCALE_FACTOR);
+    const { ctx, canvas, transform } =
+      this._getPageDrawContext(DRAW_UPSCALE_FACTOR);
     const drawViewport = this.viewport.clone({
       scale: DRAW_UPSCALE_FACTOR * this.scale,
     });
@@ -289,46 +303,33 @@ class PDFThumbnailView {
     };
 
     const renderContext = {
-      canvas,
+      canvasContext: ctx,
       transform,
       viewport: drawViewport,
       optionalContentConfigPromise: this._optionalContentConfigPromise,
-      pageColors,
+      pageColors: this.pageColors,
     };
     const renderTask = (this.renderTask = pdfPage.render(renderContext));
     renderTask.onContinue = renderContinueCallback;
 
-    let error = null;
-    try {
-      await renderTask.promise;
-    } catch (e) {
-      if (e instanceof RenderingCancelledException) {
-        zeroCanvas(canvas);
-        return;
-      }
-      error = e;
-    } finally {
-      // The renderTask may have been replaced by a new one, so only remove
-      // the reference to the renderTask if it matches the one that is
-      // triggering this callback.
-      if (renderTask === this.renderTask) {
-        this.renderTask = null;
-      }
-    }
-    this.renderingState = RenderingStates.FINISHED;
+    const resultPromise = renderTask.promise.then(
+      () => this.#finishRenderTask(renderTask, canvas),
+      error => this.#finishRenderTask(renderTask, canvas, error)
+    );
+    resultPromise.finally(() => {
+      // Zeroing the width and height causes Firefox to release graphics
+      // resources immediately, which can greatly reduce memory consumption.
+      canvas.width = 0;
+      canvas.height = 0;
 
-    this.#convertCanvasToImage(canvas);
-    zeroCanvas(canvas);
-
-    this.eventBus.dispatch("thumbnailrendered", {
-      source: this,
-      pageNumber: this.id,
-      pdfPage,
+      this.eventBus.dispatch("thumbnailrendered", {
+        source: this,
+        pageNumber: this.id,
+        pdfPage: this.pdfPage,
+      });
     });
 
-    if (error) {
-      throw error;
-    }
+    return resultPromise;
   }
 
   setImage(pageView) {
@@ -347,33 +348,14 @@ class PDFThumbnailView {
       return;
     }
     this.renderingState = RenderingStates.FINISHED;
-    this.#convertCanvasToImage(canvas);
+    this._convertCanvasToImage(canvas);
   }
 
-  #getReducedImageDims(canvas) {
-    const width = canvas.width << MAX_NUM_SCALING_STEPS,
-      height = canvas.height << MAX_NUM_SCALING_STEPS;
-
-    const outputScale = new OutputScale();
-    // Here we're not actually "rendering" to the canvas and the `OutputScale`
-    // is thus only used to limit the canvas size, hence the identity scale.
-    outputScale.sx = outputScale.sy = 1;
-
-    outputScale.limitCanvas(
-      width,
-      height,
-      this.maxCanvasPixels,
-      this.maxCanvasDim
-    );
-    return [(width * outputScale.sx) | 0, (height * outputScale.sy) | 0];
-  }
-
-  #reduceImage(img) {
-    const { canvas } = this.#getPageDrawContext(1);
-    const ctx = canvas.getContext("2d", {
-      alpha: false,
-      willReadFrequently: false,
-    });
+  /**
+   * @private
+   */
+  _reduceImage(img) {
+    const { ctx, canvas } = this._getPageDrawContext();
 
     if (img.width <= 2 * canvas.width) {
       ctx.drawImage(
@@ -390,7 +372,8 @@ class PDFThumbnailView {
       return canvas;
     }
     // drawImage does an awful job of rescaling the image, doing it gradually.
-    let [reducedWidth, reducedHeight] = this.#getReducedImageDims(canvas);
+    let reducedWidth = canvas.width << MAX_NUM_SCALING_STEPS;
+    let reducedHeight = canvas.height << MAX_NUM_SCALING_STEPS;
     const [reducedImage, reducedImageCtx] = TempImageFactory.getCanvas(
       reducedWidth,
       reducedHeight
@@ -440,8 +423,16 @@ class PDFThumbnailView {
     return canvas;
   }
 
-  get #pageL10nArgs() {
-    return JSON.stringify({ page: this.pageLabel ?? this.id });
+  get _thumbPageTitle() {
+    return this.l10n.get("thumb_page_title", {
+      page: this.pageLabel ?? this.id,
+    });
+  }
+
+  get _thumbPageCanvas() {
+    return this.l10n.get("thumb_page_canvas", {
+      page: this.pageLabel ?? this.id,
+    });
   }
 
   /**
@@ -450,12 +441,17 @@ class PDFThumbnailView {
   setPageLabel(label) {
     this.pageLabel = typeof label === "string" ? label : null;
 
-    this.anchor.setAttribute("data-l10n-args", this.#pageL10nArgs);
+    this._thumbPageTitle.then(msg => {
+      this.anchor.title = msg;
+    });
 
     if (this.renderingState !== RenderingStates.FINISHED) {
       return;
     }
-    this.image?.setAttribute("data-l10n-args", this.#pageL10nArgs);
+
+    this._thumbPageCanvas.then(msg => {
+      this.image?.setAttribute("aria-label", msg);
+    });
   }
 }
 

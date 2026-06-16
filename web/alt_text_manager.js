@@ -13,10 +13,14 @@
  * limitations under the License.
  */
 
-import { DOMSVGFactory } from "pdfjs-lib";
+import { DOMSVGFactory, shadow } from "pdfjs-lib";
 
 class AltTextManager {
-  #clickAC = null;
+  #boundUpdateUIState = this.#updateUIState.bind(this);
+
+  #boundSetPosition = this.#setPosition.bind(this);
+
+  #boundOnClick = this.#onClick.bind(this);
 
   #currentEditor = null;
 
@@ -41,8 +45,6 @@ class AltTextManager {
   #uiManager;
 
   #previousAltText = null;
-
-  #resizeAC = null;
 
   #svgElement = null;
 
@@ -75,8 +77,6 @@ class AltTextManager {
     this.#eventBus = eventBus;
     this.#container = container;
 
-    const onUpdateUIState = this.#updateUIState.bind(this);
-
     dialog.addEventListener("close", this.#close.bind(this));
     dialog.addEventListener("contextmenu", event => {
       if (event.target !== this.#textarea) {
@@ -85,10 +85,20 @@ class AltTextManager {
     });
     cancelButton.addEventListener("click", this.#finish.bind(this));
     saveButton.addEventListener("click", this.#save.bind(this));
-    optionDescription.addEventListener("change", onUpdateUIState);
-    optionDecorative.addEventListener("change", onUpdateUIState);
+    optionDescription.addEventListener("change", this.#boundUpdateUIState);
+    optionDecorative.addEventListener("change", this.#boundUpdateUIState);
 
     this.#overlayManager.register(dialog);
+  }
+
+  get _elements() {
+    return shadow(this, "_elements", [
+      this.#optionDescription,
+      this.#optionDecorative,
+      this.#textarea,
+      this.#saveButton,
+      this.#cancelButton,
+    ]);
   }
 
   #createSVGElement() {
@@ -128,21 +138,12 @@ class AltTextManager {
     if (this.#currentEditor || !editor) {
       return;
     }
+
     this.#createSVGElement();
 
     this.#hasUsedPointer = false;
-
-    this.#clickAC = new AbortController();
-    const clickOpts = { signal: this.#clickAC.signal },
-      onClick = this.#onClick.bind(this);
-    for (const element of [
-      this.#optionDescription,
-      this.#optionDecorative,
-      this.#textarea,
-      this.#saveButton,
-      this.#cancelButton,
-    ]) {
-      element.addEventListener("click", onClick, clickOpts);
+    for (const element of this._elements) {
+      element.addEventListener("click", this.#boundOnClick);
     }
 
     const { altText, decorative } = editor.altTextData;
@@ -159,11 +160,7 @@ class AltTextManager {
     this.#currentEditor = editor;
     this.#uiManager = uiManager;
     this.#uiManager.removeEditListeners();
-
-    this.#resizeAC = new AbortController();
-    this.#eventBus._on("resize", this.#setPosition.bind(this), {
-      signal: this.#resizeAC.signal,
-    });
+    this.#eventBus._on("resize", this.#boundSetPosition);
 
     try {
       await this.#overlayManager.open(this.#dialog);
@@ -245,23 +242,28 @@ class AltTextManager {
   }
 
   #finish() {
-    this.#overlayManager.closeIfActive(this.#dialog);
+    if (this.#overlayManager.active === this.#dialog) {
+      this.#overlayManager.close(this.#dialog);
+    }
   }
 
   #close() {
-    this.#currentEditor._reportTelemetry(
-      this.#telemetryData || {
-        action: "alt_text_cancel",
-        alt_text_keyboard: !this.#hasUsedPointer,
-      }
-    );
+    this.#eventBus.dispatch("reporttelemetry", {
+      source: this,
+      details: {
+        type: "editing",
+        subtype: this.#currentEditor.editorType,
+        data: this.#telemetryData || {
+          action: "alt_text_cancel",
+          alt_text_keyboard: !this.#hasUsedPointer,
+        },
+      },
+    });
     this.#telemetryData = null;
 
     this.#removeOnClickListeners();
     this.#uiManager?.addEditListeners();
-    this.#resizeAC?.abort();
-    this.#resizeAC = null;
-    this.#currentEditor.altTextFinish();
+    this.#eventBus._off("resize", this.#boundSetPosition);
     this.#currentEditor = null;
     this.#uiManager = null;
   }
@@ -297,8 +299,9 @@ class AltTextManager {
   }
 
   #removeOnClickListeners() {
-    this.#clickAC?.abort();
-    this.#clickAC = null;
+    for (const element of this._elements) {
+      element.removeEventListener("click", this.#boundOnClick);
+    }
   }
 
   destroy() {

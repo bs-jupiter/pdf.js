@@ -28,7 +28,6 @@ import {
   ISOAdobeCharset,
 } from "./charsets.js";
 import { ExpertEncoding, StandardEncoding } from "./encodings.js";
-import { readInt16 } from "./core_utils.js";
 
 // Maximum subroutine call depth of type 2 charstrings. Matches OTS.
 const MAX_SUBR_NESTING = 10;
@@ -360,8 +359,8 @@ class CFFParser {
       if (value === 30) {
         return parseFloatOperand();
       } else if (value === 28) {
-        value = readInt16(dict, pos);
-        pos += 2;
+        value = dict[pos++];
+        value = ((value << 24) | (dict[pos++] << 16)) >> 16;
         return value;
       } else if (value === 29) {
         value = dict[pos++];
@@ -511,7 +510,7 @@ class CFFParser {
         }
       } else if (value === 28) {
         // number (16 bit)
-        stack[stackSize] = readInt16(data, j);
+        stack[stackSize] = ((data[j] << 24) | (data[j + 1] << 16)) >> 16;
         j += 2;
         stackSize++;
       } else if (value === 14) {
@@ -1769,16 +1768,12 @@ class CFFCompiler {
     if (isCIDFont) {
       // In a CID font, the charset is a mapping of CIDs not SIDs so just
       // create an identity mapping.
-      // nLeft: Glyphs left in range (excluding first) (see the CFF specs).
-      // The first CID must be 1 in order to avoid a print issue on mac (see
-      // https://bugzilla.mozilla.org/1961423).
-      const nLeft = numGlyphsLessNotDef - 1;
       out = new Uint8Array([
         2, // format
         0, // first CID upper byte
-        1, // first CID lower byte
-        (nLeft >> 8) & 0xff,
-        nLeft & 0xff,
+        0, // first CID lower byte
+        (numGlyphsLessNotDef >> 8) & 0xff,
+        numGlyphsLessNotDef & 0xff,
       ]);
     } else {
       const length = 1 + numGlyphsLessNotDef * 2;

@@ -16,7 +16,6 @@
 import {
   backtrackBeforeAllVisibleElements,
   binarySearchFirstItem,
-  calcRound,
   getPageSizeInches,
   getVisibleElements,
   isPortraitOrientation,
@@ -234,8 +233,9 @@ describe("ui_utils", function () {
       let lineTop = 0,
         id = 0;
       for (const line of lines) {
-        const heights = line.map(pair => pair[1]);
-        const lineHeight = Math.max(...heights);
+        const lineHeight = line.reduce(function (maxHeight, pair) {
+          return Math.max(maxHeight, pair[1]);
+        }, 0);
         let offsetLeft = -BORDER_WIDTH;
         for (const [clientWidth, clientHeight] of line) {
           const offsetTop =
@@ -278,11 +278,12 @@ describe("ui_utils", function () {
           viewTop < scrollBottom &&
           viewBottom > scrollTop
         ) {
-          const minY = Math.max(0, scrollTop - viewTop);
-          const minX = Math.max(0, scrollLeft - viewLeft);
-
-          const hiddenHeight = minY + Math.max(0, viewBottom - scrollBottom);
-          const hiddenWidth = minX + Math.max(0, viewRight - scrollRight);
+          const hiddenHeight =
+            Math.max(0, scrollTop - viewTop) +
+            Math.max(0, viewBottom - scrollBottom);
+          const hiddenWidth =
+            Math.max(0, scrollLeft - viewLeft) +
+            Math.max(0, viewRight - scrollRight);
 
           const fractionHeight =
             (div.clientHeight - hiddenHeight) / div.clientHeight;
@@ -290,23 +291,12 @@ describe("ui_utils", function () {
             (div.clientWidth - hiddenWidth) / div.clientWidth;
           const percent = (fractionHeight * fractionWidth * 100) | 0;
 
-          let visibleArea = null;
-          if (percent < 100) {
-            visibleArea = {
-              minX,
-              minY,
-              maxX: Math.min(viewRight, scrollRight) - viewLeft,
-              maxY: Math.min(viewBottom, scrollBottom) - viewTop,
-            };
-          }
-
           views.push({
             id: view.id,
             x: viewLeft,
             y: viewTop,
             view,
             percent,
-            visibleArea,
             widthPercent: (fractionWidth * 100) | 0,
           });
           ids.add(view.id);
@@ -319,12 +309,14 @@ describe("ui_utils", function () {
     // test to the slower implementation above, for a range of scroll viewport
     // sizes and positions.
     function scrollOverDocument(pages, horizontal = false, rtl = false) {
-      const sizes = pages.map(({ div }) =>
-        horizontal
-          ? Math.abs(div.offsetLeft + div.clientLeft + div.clientWidth)
-          : div.offsetTop + div.clientTop + div.clientHeight
-      );
-      const size = Math.max(...sizes);
+      const size = pages.reduce(function (max, { div }) {
+        return Math.max(
+          max,
+          horizontal
+            ? Math.abs(div.offsetLeft + div.clientLeft + div.clientWidth)
+            : div.offsetTop + div.clientTop + div.clientHeight
+        );
+      }, 0);
       // The numbers (7 and 5) are mostly arbitrary, not magic: increase them to
       // make scrollOverDocument tests faster, decrease them to make the tests
       // more scrupulous, and keep them coprime to reduce the chance of missing
@@ -633,19 +625,6 @@ describe("ui_utils", function () {
           backtrackBeforeAllVisibleElements(bsResult, pages, top2)
         ).toEqual(4);
       });
-    });
-  });
-
-  describe("calcRound", function () {
-    it("should handle different browsers/environments correctly", function () {
-      if (
-        typeof window !== "undefined" &&
-        window.navigator?.userAgent?.includes("Firefox")
-      ) {
-        expect(calcRound(1.6)).not.toEqual(1.6);
-      } else {
-        expect(calcRound(1.6)).toEqual(1.6);
-      }
     });
   });
 });

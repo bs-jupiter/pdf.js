@@ -37,10 +37,8 @@ class OverlayManager {
     }
     this.#overlays.set(dialog, { canForceClose });
 
-    dialog.addEventListener("cancel", ({ target }) => {
-      if (this.#active === target) {
-        this.#active = null;
-      }
+    dialog.addEventListener("cancel", evt => {
+      this.#active = null;
     });
   }
 
@@ -80,17 +78,6 @@ class OverlayManager {
     }
     dialog.close();
     this.#active = null;
-  }
-
-  /**
-   * @param {HTMLDialogElement} dialog - The overlay's DOM element.
-   * @returns {Promise} A promise that is resolved when the overlay has been
-   *                    closed.
-   */
-  async closeIfActive(dialog) {
-    if (this.#active === dialog) {
-      await this.close(dialog);
-    }
   }
 }
 

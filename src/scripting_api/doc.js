@@ -96,28 +96,13 @@ class Doc extends PDFObject {
     this._zoom = data.zoom || 100;
     this._actions = createActionsMap(data.actions);
     this._globalEval = data.globalEval;
-    this._pageActions = null;
+    this._pageActions = new Map();
     this._userActivation = false;
     this._disablePrinting = false;
     this._disableSaving = false;
-    this._otherPageActions = null;
   }
 
   _initActions() {
-    for (const { obj } of this._fields.values()) {
-      // Some fields may have compute their values so we need to send them
-      // to the view.
-      const initialValue = obj._initialValue;
-      if (initialValue) {
-        this._send({
-          id: obj._id,
-          siblings: obj._siblings,
-          value: initialValue,
-          formattedValue: obj.value.toString(),
-        });
-      }
-    }
-
     const dontRun = new Set([
       "WillClose",
       "WillSave",
@@ -170,35 +155,25 @@ class Doc extends PDFObject {
 
   _dispatchPageEvent(name, actions, pageNumber) {
     if (name === "PageOpen") {
-      this._pageActions ||= new Map();
       if (!this._pageActions.has(pageNumber)) {
         this._pageActions.set(pageNumber, createActionsMap(actions));
       }
       this._pageNum = pageNumber - 1;
     }
 
-    for (const acts of [this._pageActions, this._otherPageActions]) {
-      actions = acts?.get(pageNumber)?.get(name);
-      if (actions) {
-        for (const action of actions) {
-          this._globalEval(action);
-        }
+    actions = this._pageActions.get(pageNumber)?.get(name);
+    if (actions) {
+      for (const action of actions) {
+        this._globalEval(action);
       }
     }
   }
 
   _runActions(name) {
     const actions = this._actions.get(name);
-    if (!actions) {
-      return;
-    }
-    for (const action of actions) {
-      try {
+    if (actions) {
+      for (const action of actions) {
         this._globalEval(action);
-      } catch (error) {
-        const serializedError = serializeError(error);
-        serializedError.value = `Error when executing "${name}" for document\n${serializedError.value}`;
-        this._send(serializedError);
       }
     }
   }
@@ -207,34 +182,6 @@ class Doc extends PDFObject {
     this._fields.set(name, field);
     this._fieldNames.push(name);
     this._numFields++;
-
-    // Fields on a page can have PageOpen/PageClose actions.
-    const po = field.obj._actions.get("PageOpen");
-    const pc = field.obj._actions.get("PageClose");
-    if (po || pc) {
-      this._otherPageActions ||= new Map();
-      let actions = this._otherPageActions.get(field.obj._page + 1);
-      if (!actions) {
-        actions = new Map();
-        this._otherPageActions.set(field.obj._page + 1, actions);
-      }
-      if (po) {
-        let poActions = actions.get("PageOpen");
-        if (!poActions) {
-          poActions = [];
-          actions.set("PageOpen", poActions);
-        }
-        poActions.push(...po);
-      }
-      if (pc) {
-        let pcActions = actions.get("PageClose");
-        if (!pcActions) {
-          pcActions = [];
-          actions.set("PageClose", pcActions);
-        }
-        pcActions.push(...pc);
-      }
-    }
   }
 
   _getDate(date) {

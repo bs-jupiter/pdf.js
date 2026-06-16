@@ -30,6 +30,7 @@ import { AnnotationLayerBuilder } from "./annotation_layer_builder.js";
 import { DownloadManager } from "./download_manager.js";
 import { EventBus } from "./event_utils.js";
 import { GenericL10n } from "./genericl10n.js";
+import { NullL10n } from "./l10n_utils.js";
 import { PDFHistory } from "./pdf_history.js";
 import { PDFPageView } from "./pdf_page_view.js";
 import { PDFScriptingManager } from "./pdf_scripting_manager.component.js";
@@ -39,30 +40,12 @@ import { StructTreeLayerBuilder } from "./struct_tree_layer_builder.js";
 import { TextLayerBuilder } from "./text_layer_builder.js";
 import { XfaLayerBuilder } from "./xfa_layer_builder.js";
 
-globalThis.pdfjsViewer = {
-  AnnotationLayerBuilder,
-  DownloadManager,
-  EventBus,
-  FindState,
-  GenericL10n,
-  LinkTarget,
-  parseQueryString,
-  PDFFindController,
-  PDFHistory,
-  PDFLinkService,
-  PDFPageView,
-  PDFScriptingManager,
-  PDFSinglePageViewer,
-  PDFViewer,
-  ProgressBar,
-  RenderingStates,
-  ScrollMode,
-  SimpleLinkService,
-  SpreadMode,
-  StructTreeLayerBuilder,
-  TextLayerBuilder,
-  XfaLayerBuilder,
-};
+/* eslint-disable-next-line no-unused-vars */
+const pdfjsVersion =
+  typeof PDFJSDev !== "undefined" ? PDFJSDev.eval("BUNDLE_VERSION") : void 0;
+/* eslint-disable-next-line no-unused-vars */
+const pdfjsBuild =
+  typeof PDFJSDev !== "undefined" ? PDFJSDev.eval("BUNDLE_BUILD") : void 0;
 
 export {
   AnnotationLayerBuilder,
@@ -71,6 +54,7 @@ export {
   FindState,
   GenericL10n,
   LinkTarget,
+  NullL10n,
   parseQueryString,
   PDFFindController,
   PDFHistory,
